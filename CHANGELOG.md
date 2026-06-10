@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.1 - 2026-06-10
+
+### Fixed
+
+- Reject categories that are not valid for a ticket's entity or incident/request type.
+- Render GLPI solution template variables before saving the solution.
+- Prevent concurrent bulk actions from adding duplicate solutions to the same ticket.
+- Roll back the category update if adding or rendering the solution fails.
+- Reuse the same validated processing path on the standard mass action and plugin page.
+- Reject attempts to resolve tickets that are already solved or closed.
+
+### Added
+
+- Transactional ticket processing and per-ticket concurrency locking.
+- Regression coverage for permissions, multiple tickets, invalid input, templates, rollback, and concurrency.
+- Browser end-to-end coverage for both supported user flows.
+- Automated PHP 8.2, 8.3, and 8.4 syntax checks.
+
 ## 0.1.0 - 2026-05-06
 
 Initial release.

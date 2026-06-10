@@ -24,11 +24,11 @@ The plugin adds a bulk action named **Resolve with category** to GLPI tickets. I
 
 ## Installation
 
-1. Download `bulkresolve-0.1.0.zip`.
+1. Download `bulkresolve-0.1.1.zip`.
 2. Extract it into your GLPI plugins directory:
 
    ```bash
-   unzip bulkresolve-0.1.0.zip -d /var/www/glpi/plugins/
+   unzip bulkresolve-0.1.1.zip -d /var/www/glpi/plugins/
    ```
 
    After extraction, the plugin must be located at:
@@ -64,9 +64,18 @@ php /var/www/glpi/bin/console plugin:activate bulkresolve
 - The plugin does not create or modify database tables.
 - Existing GLPI categories, solution types, and solution templates are used.
 
-## Development note
+## Testing
 
-This plugin was created with the help of AI. It has been smoke-tested on GLPI `11.0.7`, but additional testing is still recommended before using it in production.
+Version `0.1.1` was tested on GLPI `11.0.7` with:
+
+- PHP syntax checks on PHP 8.2, 8.3, and 8.4.
+- Standard ticket-list mass action and separate plugin-page browser flows.
+- Category validation across ticket types and entities.
+- Permission checks for users with and without ticket update rights.
+- Solution templates, invalid templates, solution types, and rollback behavior.
+- Multiple selected tickets, already solved tickets, and concurrent processing.
+
+The plugin was created with the help of AI and has no database schema changes.
 
 ## Author
 

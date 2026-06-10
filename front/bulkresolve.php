@@ -12,7 +12,7 @@ function plugin_bulkresolve_get_ticket_list($limit = 100) {
    return $tickets;
 }
 function plugin_bulkresolve_process() {
-   $ticket_ids = array_map('intval', $_POST['tickets'] ?? []);
+   $ticket_ids = array_values(array_unique(array_map('intval', $_POST['tickets'] ?? [])));
    $category_id = (int)($_POST['itilcategories_id'] ?? 0);
    $solution = trim($_POST['solution'] ?? '');
    $solution_type_id = (int)($_POST['solutiontypes_id'] ?? 0);
@@ -25,14 +25,17 @@ function plugin_bulkresolve_process() {
    if ($solution_type_id > 0) { $solution_type = new SolutionType(); if (!$solution_type->getFromDB($solution_type_id)) { Session::addMessageAfterRedirect(__('Selected solution type cannot be loaded.', 'bulkresolve'), false, ERROR); return; } }
    $ok = 0; $failed = [];
    foreach ($ticket_ids as $ticket_id) {
-      $ticket = new Ticket();
-      if (!$ticket->getFromDB($ticket_id) || !$ticket->can($ticket_id, UPDATE)) { $failed[] = sprintf(__('Ticket #%s: no permission or not found', 'bulkresolve'), $ticket_id); continue; }
-      if (in_array((int)$ticket->fields['status'], [CommonITILObject::SOLVED, CommonITILObject::CLOSED], true)) { $failed[] = sprintf(__('Ticket #%s: already solved/closed', 'bulkresolve'), $ticket_id); continue; }
-      if (!$ticket->update(['id'=>$ticket_id, 'itilcategories_id'=>$category_id])) { $failed[] = sprintf(__('Ticket #%s: category update failed', 'bulkresolve'), $ticket_id); continue; }
-      $solution_input = ['itemtype'=>Ticket::class, 'items_id'=>$ticket_id, 'content'=>$solution];
-      if ($solution_type_id > 0) { $solution_input['solutiontypes_id'] = $solution_type_id; }
-      $itil_solution = new ITILSolution();
-      if ($itil_solution->add($solution_input)) { $ok++; } else { $failed[] = sprintf(__('Ticket #%s: solution/resolution failed', 'bulkresolve'), $ticket_id); }
+      $result = PluginBulkresolveBulkresolve::resolveTicket(
+         $ticket_id,
+         $category_id,
+         $solution_type_id,
+         $solution
+      );
+      if ($result['result'] === MassiveAction::ACTION_OK) {
+         $ok++;
+      } elseif ($result['message'] !== null) {
+         $failed[] = $result['message'];
+      }
    }
    if ($ok > 0) { Session::addMessageAfterRedirect(sprintf(__('%s ticket(s) resolved.', 'bulkresolve'), $ok), true, INFO); }
    foreach ($failed as $msg) { Session::addMessageAfterRedirect($msg, false, ERROR); }

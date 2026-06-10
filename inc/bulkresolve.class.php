@@ -99,6 +99,121 @@ JAVASCRIPT;
       return true;
    }
 
+   public static function resolveTicket(
+      int $ticket_id,
+      int $category_id,
+      int $solution_type_id,
+      string $content,
+      bool $render_twig = false
+   ): array {
+      global $DB;
+
+      $lock_name = 'bulkresolve.ticket.' . $ticket_id;
+      $lock_acquired = false;
+      for ($attempt = 0; $attempt < 50; $attempt++) {
+         if ($DB->getLock($lock_name)) {
+            $lock_acquired = true;
+            break;
+         }
+         usleep(100000);
+      }
+      if (!$lock_acquired) {
+         return [
+            'result'  => MassiveAction::ACTION_KO,
+            'message' => sprintf(
+               __('Ticket #%s is already being processed by another bulk action.', 'bulkresolve'),
+               $ticket_id
+            ),
+         ];
+      }
+
+      $DB->beginTransaction();
+
+      try {
+         $ticket = new Ticket();
+         if (!$ticket->getFromDB($ticket_id) || !$ticket->can($ticket_id, UPDATE)) {
+            $DB->rollBack();
+            return [
+               'result'  => MassiveAction::ACTION_NORIGHT,
+               'message' => sprintf(__('Ticket #%s: no permission or not found', 'bulkresolve'), $ticket_id),
+            ];
+         }
+
+         if (in_array((int)$ticket->fields['status'], [CommonITILObject::SOLVED, CommonITILObject::CLOSED], true)) {
+            $DB->rollBack();
+            return [
+               'result'  => MassiveAction::ACTION_KO,
+               'message' => sprintf(__('Ticket #%s is already solved or closed.', 'bulkresolve'), $ticket_id),
+            ];
+         }
+
+         if (!Ticket::isCategoryValid([
+            'itilcategories_id' => $category_id,
+            'type'              => (int)$ticket->fields['type'],
+            'entities_id'       => (int)$ticket->fields['entities_id'],
+         ])) {
+            $DB->rollBack();
+            return [
+               'result'  => MassiveAction::ACTION_KO,
+               'message' => sprintf(
+                  __('Ticket #%s: selected category is not valid for its type or entity.', 'bulkresolve'),
+                  $ticket_id
+               ),
+            ];
+         }
+
+         if (!$ticket->update([
+            'id'                => $ticket_id,
+            'itilcategories_id' => $category_id,
+         ])) {
+            throw new RuntimeException(
+               sprintf(__('Ticket #%s category update failed.', 'bulkresolve'), $ticket_id)
+            );
+         }
+
+         $solution_input = [
+            'itemtype' => Ticket::getType(),
+            'items_id' => $ticket_id,
+            'content'  => $content,
+         ];
+         if ($solution_type_id > 0) {
+            $solution_input['solutiontypes_id'] = $solution_type_id;
+         }
+         if ($render_twig) {
+            $solution_input['_render_twig'] = true;
+         }
+
+         $solution = new ITILSolution();
+         if (!$solution->add($solution_input)) {
+            throw new RuntimeException(
+               sprintf(__('Ticket #%s solution failed.', 'bulkresolve'), $ticket_id)
+            );
+         }
+
+         $ticket->getFromDB($ticket_id);
+         if (!in_array((int)$ticket->fields['status'], [CommonITILObject::SOLVED, CommonITILObject::CLOSED], true)) {
+            throw new RuntimeException(
+               sprintf(__('Ticket #%s was not moved to a solved status.', 'bulkresolve'), $ticket_id)
+            );
+         }
+
+         $DB->commit();
+         return [
+            'result'  => MassiveAction::ACTION_OK,
+            'message' => null,
+         ];
+      } catch (Throwable $e) {
+         $DB->rollBack();
+
+         return [
+            'result'  => MassiveAction::ACTION_KO,
+            'message' => $e->getMessage(),
+         ];
+      } finally {
+         $DB->releaseLock($lock_name);
+      }
+   }
+
    public static function processMassiveActionsForOneItemtype(MassiveAction $ma, CommonDBTM $item, array $ids) {
       if ($ma->getAction() !== 'bulk_resolve_with_category') {
          return;
@@ -116,6 +231,7 @@ JAVASCRIPT;
       $category_id = (int)($input['itilcategories_id'] ?? 0);
       $solution_type_id = (int)($input['solutiontypes_id'] ?? 0);
       $content = trim($input['content'] ?? '');
+      $render_twig = (bool)($input['_render_twig'] ?? false);
       if ($category_id <= 0 || $content === '') {
          $ma->addMessage(__('Category and solution are mandatory.', 'bulkresolve'));
          foreach ($ids as $id) {
@@ -144,38 +260,17 @@ JAVASCRIPT;
          }
       }
 
-      $ticket = new Ticket();
       foreach ($ids as $id) {
-         if (!$ticket->getFromDB($id) || !$ticket->can($id, UPDATE)) {
-            $ma->itemDone($item->getType(), $id, MassiveAction::ACTION_NORIGHT);
-            continue;
-         }
-         if (in_array((int)$ticket->fields['status'], [CommonITILObject::SOLVED, CommonITILObject::CLOSED], true)) {
-            $ma->itemDone($item->getType(), $id, MassiveAction::ACTION_KO);
-            $ma->addMessage(sprintf(__('Ticket #%s is already solved or closed.', 'bulkresolve'), $id));
-            continue;
-         }
-         if (!$ticket->update(['id' => $id, 'itilcategories_id' => $category_id])) {
-            $ma->itemDone($item->getType(), $id, MassiveAction::ACTION_KO);
-            $ma->addMessage(sprintf(__('Ticket #%s category update failed.', 'bulkresolve'), $id));
-            continue;
-         }
-
-         $solution_input = [
-            'itemtype' => Ticket::getType(),
-            'items_id' => $id,
-            'content'  => $content,
-         ];
-         if ($solution_type_id > 0) {
-            $solution_input['solutiontypes_id'] = $solution_type_id;
-         }
-
-         $solution = new ITILSolution();
-         if ($solution->add($solution_input)) {
-            $ma->itemDone($item->getType(), $id, MassiveAction::ACTION_OK);
-         } else {
-            $ma->itemDone($item->getType(), $id, MassiveAction::ACTION_KO);
-            $ma->addMessage(sprintf(__('Ticket #%s solution failed.', 'bulkresolve'), $id));
+         $result = self::resolveTicket(
+            (int)$id,
+            $category_id,
+            $solution_type_id,
+            $content,
+            $render_twig
+         );
+         $ma->itemDone($item->getType(), $id, $result['result']);
+         if ($result['message'] !== null) {
+            $ma->addMessage($result['message']);
          }
       }
    }
